@@ -10,6 +10,7 @@ from auth import login_required
 from constants import MEMBERS
 from flask import request, render_template_string
 
+
 adminbp = Blueprint("adminbp", __name__)
 
 def _day_to_date(val) -> date:
@@ -296,7 +297,7 @@ def admin_diag():
     day_set = set()
     for r in rows:
         d = r["day"]
-        d = day_to_date(d) if not isinstance(d, date) else d
+        d = _day_to_date(d) if not isinstance(d, date) else d
         day_set.add(d)
         by_day[d][r["member_key"]] = r["role"]
 
