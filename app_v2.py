@@ -1,21 +1,42 @@
 # app_v2.py
 from flask import Flask, redirect, url_for
 from jinja2 import DictLoader
+from datetime import timedelta
+from flask_login import current_user
 
-from constants import APP_SECRET, APP_VERSION
+from constants import APP_SECRET, APP_VERSION, DATABASE_URL
 from templates import BASE_TMPL, LOGIN_TMPL, TODAY_TMPL, HISTORY_TMPL, STATS_TMPL
 from db import get_db, close_db
-from auth import authbp
+from auth import authbp, login_manager  # login_manager is defined in auth.py
 from routes_today import todaybp
 from routes_history import historybp
 from routes_admin import adminbp
 from routes_account import accountbp
 
+
 def create_app():
     app = Flask(__name__)
     app.secret_key = APP_SECRET
 
-    # Make templates available without a filesystem
+    # Make sure db.py uses the same SQLite file everywhere
+    app.database_url = DATABASE_URL  # get_db() reads this via current_app.database_url
+
+    # Cookie hardening + remember-me persistence
+    app.config.update(
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        REMEMBER_COOKIE_SECURE=True,
+        REMEMBER_COOKIE_HTTPONLY=True,
+        REMEMBER_COOKIE_SAMESITE="Lax",
+        REMEMBER_COOKIE_DURATION=timedelta(days=30),
+    )
+
+    # Initialize Flask-Login
+    login_manager.init_app(app)
+    login_manager.login_view = "authbp.login"
+
+    # In-memory templates
     app.jinja_loader = DictLoader({
         "BASE_TMPL": BASE_TMPL,
         "LOGIN_TMPL": LOGIN_TMPL,
@@ -24,14 +45,17 @@ def create_app():
         "STATS_TMPL": STATS_TMPL,
     })
 
-    # Register blueprints (put accountbp BEFORE authbp)
-    app.register_blueprint(accountbp)  # <-- move this up
+    # Optional bridge: keep legacy `{% if is_admin %}` checks working
+    @app.context_processor
+    def inject_flags():
+        return {"is_admin": bool(getattr(current_user, "is_admin", False))}
+
+    # Register blueprints
+    app.register_blueprint(accountbp)
     app.register_blueprint(authbp)
     app.register_blueprint(todaybp)
     app.register_blueprint(historybp)
     app.register_blueprint(adminbp)
-
-
 
     # Root
     @app.route("/")
@@ -43,16 +67,8 @@ def create_app():
     def _close_db(error=None):
         close_db(error)
 
-    # # Debug routes
-    # @app.route("/__version__")
-    # def __version__():
-    #     return "SINGLE-POOL v2", 200, {"Content-Type": "text/plain"}
-    #
-    # @app.route("/__routes__")
-    # def __routes__():
-    #     return {"routes": [str(r) for r in app.url_map.iter_rules()]}
-
     return app
+
 
 if __name__ == "__main__":
     app = create_app()

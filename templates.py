@@ -48,7 +48,7 @@ BASE_TMPL = """
         <li class="nav-item"><a class="nav-link" href="{{ url_for('todaybp.today') }}">Today</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('historybp.history') }}">History</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('authbp.account') }}">Account</a></li>
-        {% if session.get('is_admin') %}
+        {% if current_user.is_authenticated and current_user.is_admin %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('adminbp.admin_users') }}">Users</a></li>
           <li class="nav-item"><a class="nav-link" href="{{ url_for('adminbp.admin_diag') }}">Diag</a></li>
           <li class="nav-item"><a class="nav-link" href="{{ url_for('adminbp.admin_audit') }}">Audit</a></li>
@@ -126,7 +126,8 @@ LOGIN_TMPL = """
   <form method="post">
     <label>Username<br><input name="username" required></label><br><br>
     <label>Password<br><input name="password" type="password" required></label><br><br>
-    <button type="submit">Sign in</button>
+    <label><input type="checkbox" name="remember"> Remember me</label>
+    <button type="submit">Let me in</button>
   </form>
 </body>
 </html>
