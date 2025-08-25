@@ -11,3 +11,4 @@ venv/
 .idea/
 .vscode/
 data.db
+*.db
