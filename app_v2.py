@@ -9,6 +9,7 @@ from auth import authbp
 from routes_today import todaybp
 from routes_history import historybp
 from routes_admin import adminbp
+from routes_account import accountbp
 
 def create_app():
     app = Flask(__name__)
@@ -23,11 +24,14 @@ def create_app():
         "STATS_TMPL": STATS_TMPL,
     })
 
-    # Blueprints
+    # Register blueprints (put accountbp BEFORE authbp)
+    app.register_blueprint(accountbp)  # <-- move this up
     app.register_blueprint(authbp)
     app.register_blueprint(todaybp)
     app.register_blueprint(historybp)
     app.register_blueprint(adminbp)
+
+
 
     # Root
     @app.route("/")

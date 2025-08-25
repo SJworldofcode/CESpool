@@ -10,4 +10,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL", os.path.abspath("data.db"))
 MEMBERS = {"CA": "Christian", "ER": "Eric", "SJ": "Sean"}
 MEMBER_ORDER = ["CA", "ER", "SJ"]
 ROLE_CHOICES = {"D", "R", "O"}
-
+MILES_PER_RIDE = 36
+GAS_PRICE = 4.78
+AVG_MPG = 22.0
