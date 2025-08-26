@@ -32,4 +32,6 @@ eggs/
 coverage.xml
 htmlcov/
 
-# Jupyter Notebook checkpo
+*.data
+*.db
+data.db
