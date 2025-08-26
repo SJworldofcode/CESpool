@@ -1,94 +1,177 @@
 # routes_admin.py
-import os, time
-from flask import Blueprint, render_template_string, request, redirect, url_for, session, abort, flash
+import os
+import time
 from collections import defaultdict
-from datetime import date, datetime
-from flask import request, render_template_string  # ensure imported at top
 from datetime import datetime, date
+
+from flask import (
+    Blueprint, render_template_string, request, redirect,
+    url_for, session, abort, flash
+)
+
 from db import get_db
 from auth import login_required
-from constants import MEMBERS
-from flask import request, render_template_string
 
 adminbp = Blueprint("adminbp", __name__)
 
+
+# --- Utilities ----------------------------------------------------------------
 def _day_to_date(val) -> date:
-    if isinstance(val, date): return val
+    """Parse various day formats to a date; fallback to today."""
+    if isinstance(val, date):
+        return val
     s = str(val or "")
+    # Prefer ISO yyyy-mm-dd
     try:
         return datetime.strptime(s[:10], "%Y-%m-%d").date()
     except Exception:
         pass
+    # Secondary format like: "Aug 24 2025 01:23:45 PM"
     try:
         return datetime.strptime(s.replace(",", ""), "%b %d %Y %I:%M:%S %p").date()
     except Exception:
         pass
     return date.today()
 
+
+# --- Admin guard for this blueprint -------------------------------------------
 @adminbp.before_request
-def require_admin():
-    # Guard all routes in this blueprint
+def _require_admin():
+    # must be logged in
     if not session.get("user_id"):
         return redirect(url_for("authbp.login", next=request.path))
-    if not session.get("is_admin"):
+    # must be admin
+    try:
+        if int(session.get("is_admin", 0)) != 1:
+            abort(403)
+    except Exception:
         abort(403)
 
+
+# --- Users management ----------------------------------------------------------
 @adminbp.route("/admin/users", methods=["GET", "POST"])
 @login_required
 def admin_users():
+    """
+    Add new users, reset passwords, and toggle admin.
+    NOTE: uses raw SHA-256 to match your current DB; you can
+    later switch to PBKDF2 in both auth.py and here.
+    """
     db = get_db()
+
     if request.method == "POST":
-        action = request.form.get("action")
-        username = request.form.get("username", "").strip()
-        if action == "add" and username:
-            from hashlib import sha256
-            pw = request.form.get("password", "")
-            db.execute("INSERT OR REPLACE INTO users(username, password_hash, is_admin) VALUES(?,?,?)",
-                       (username, sha256(pw.encode()).hexdigest(), int(bool(request.form.get("is_admin")))))
+        action = (request.form.get("action") or "").strip()
+        username = (request.form.get("username") or "").strip()
+
+        if not username:
+            flash("Username is required.", "error")
+            return redirect(url_for("adminbp.admin_users"))
+
+        is_admin = 1 if request.form.get("is_admin") else 0
+        password = request.form.get("password") or ""
+
+        if not password:
+            flash("Password is required.", "error")
+            return redirect(url_for("adminbp.admin_users"))
+
+        from hashlib import sha256
+        pw_hash = sha256(password.encode()).hexdigest()
+
+        if action == "add":
+            db.execute(
+                "INSERT OR REPLACE INTO users(username, password_hash, is_admin) VALUES (?,?,?)",
+                (username, pw_hash, is_admin),
+            )
             db.commit()
-            flash("User saved.")
-        elif action == "reset" and username:
-            from hashlib import sha256
-            pw = request.form.get("password", "")
-            db.execute("UPDATE users SET password_hash=?, is_admin=? WHERE username=?",
-                       (sha256(pw.encode()).hexdigest(), int(bool(request.form.get("is_admin"))), username))
+            flash(f"User '{username}' saved.", "info")
+        elif action == "reset":
+            db.execute(
+                "UPDATE users SET password_hash=?, is_admin=? WHERE username=?",
+                (pw_hash, is_admin, username),
+            )
             db.commit()
-            flash("User updated.")
+            flash(f"User '{username}' updated.", "info")
+        else:
+            flash("Unknown action.", "error")
+
         return redirect(url_for("adminbp.admin_users"))
-    users = db.execute("SELECT id, username, is_admin FROM users ORDER BY username").fetchall()
+
+    users = db.execute(
+        "SELECT id, username, is_admin FROM users ORDER BY username"
+    ).fetchall()
+
     tmpl = """
     {% extends 'BASE_TMPL' %}{% block content %}
       <h3>Users</h3>
+
       <div class='card'>
         <h5>Add / Update</h5>
-        <form method='post'>
+        <form method='post' class="row gy-2 align-items-end">
           <input type='hidden' name='action' value='add'>
-          <label>Username <input name='username' required></label>
-          <label>Password <input name='password' type='password' required></label>
-          <label class="ms-2"><input type='checkbox' name='is_admin'> Admin</label>
-          <button class="btn btn-primary ms-2">Save</button>
+          <div class="col-auto">
+            <label class="form-label">Username
+              <input class="form-control" name='username' required>
+            </label>
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Password
+              <input class="form-control" name='password' type='password' required>
+            </label>
+          </div>
+          <div class="col-auto form-check mt-4">
+            <input class="form-check-input" type='checkbox' name='is_admin' id="add_admin">
+            <label class="form-check-label" for="add_admin">Admin</label>
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-primary">Save</button>
+          </div>
         </form>
       </div>
+
       <br>
+
       <div class='card'>
         <h5>Reset Password / Toggle Admin</h5>
-        <form method='post'>
+        <form method='post' class="row gy-2 align-items-end">
           <input type='hidden' name='action' value='reset'>
-          <label>Username
-            <select name='username'>
-              {% for u in users %}<option value='{{u['username']}}'>{{u['username']}}</option>{% endfor %}
-            </select>
-          </label>
-          <label class="ms-2">New Password <input name='password' type='password' required></label>
-          <label class="ms-2"><input type='checkbox' name='is_admin'> Admin</label>
-          <button class="btn btn-primary ms-2">Update</button>
+          <div class="col-auto">
+            <label class="form-label">Username
+              <select class="form-select" name='username'>
+                {% for u in users %}
+                  <option value='{{u["username"]}}'>{{u["username"]}}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div class="col-auto">
+            <label class="form-label">New Password
+              <input class="form-control" name='password' type='password' required>
+            </label>
+          </div>
+          <div class="col-auto form-check mt-4">
+            <input class="form-check-input" type='checkbox' name='is_admin' id="reset_admin">
+            <label class="form-check-label" for="reset_admin">Admin</label>
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-primary">Update</button>
+          </div>
         </form>
       </div>
+
       <br>
+
       <table class="table table-sm">
         <thead><tr><th>User</th><th>Admin</th></tr></thead>
         <tbody>
-          {% for u in users %}<tr><td>{{u['username']}}</td><td>{{'Yes' if u['is_admin'] else 'No'}}</td></tr>{% endfor %}
+          {% for u in users %}
+            <tr>
+              <td>{{ u['username'] }}</td>
+              <td>{{ 'Yes' if u['is_admin'] else 'No' }}</td>
+            </tr>
+          {% endfor %}
+          {% if not users %}
+            <tr><td colspan="2" class="text-center text-muted">No users</td></tr>
+          {% endif %}
         </tbody>
       </table>
     {% endblock %}
@@ -96,19 +179,20 @@ def admin_users():
     from templates import BASE_TMPL
     return render_template_string(tmpl, users=users, BASE_TMPL=BASE_TMPL)
 
+
+# --- Audit view ----------------------------------------------------------------
 @adminbp.route("/admin/audit")
 @login_required
 def admin_audit():
     db = get_db()
 
-    # Filters
+    # Query params
     q = (request.args.get("q") or "").strip()
     member = (request.args.get("member") or "").strip().upper()
     role = (request.args.get("role") or "").strip().upper()
     start = (request.args.get("start") or "").strip()  # YYYY-MM-DD
     end   = (request.args.get("end") or "").strip()    # YYYY-MM-DD
 
-    # Base rows
     rows = db.execute("""
         SELECT day, member_key, role,
                COALESCE(update_user,'') AS update_user,
@@ -117,7 +201,7 @@ def admin_audit():
         FROM entries
     """).fetchall()
 
-    # Apply filters in Python (supports non-ISO day formats)
+    # Convert + filter in Python (supports non-ISO day formats)
     out = []
     start_d = datetime.strptime(start, "%Y-%m-%d").date() if start else None
     end_d   = datetime.strptime(end,   "%Y-%m-%d").date() if end   else None
@@ -126,7 +210,7 @@ def admin_audit():
         d = _day_to_date(r["day"])
         if member and r["member_key"] != member:
             continue
-        if role in ("D","R","O") and r["role"] != role:
+        if role in ("D", "R", "O") and r["role"] != role:
             continue
         if start_d and d < start_d:
             continue
@@ -138,9 +222,8 @@ def admin_audit():
                 continue
         out.append(r)
 
-    # Sort: newest update_ts first, then newest day
+    # Sort by update_ts (desc), then by day (desc)
     def _sort_key(r):
-        # try update_ts, else fallback to day
         uts = str(r["update_ts"] or "")
         try:
             ts = datetime.strptime(uts[:19], "%Y-%m-%d %H:%M:%S")
@@ -225,78 +308,37 @@ def admin_audit():
     return render_template_string(tmpl, rows=out, BASE_TMPL=BASE_TMPL)
 
 
-TODAY_TMPL = """
-{% extends "BASE_TMPL" %}{% block content %}
-  <div class="mt-3"></div>  {# <-- spacing between navbar and form #}
-
-  <h3>Today's Carpool</h3>
-
-  <form method="post" class="card">
-    <div class="mb-2">
-      <input type="date" name="day" value="{{ selected_day }}" onchange="window.location='{{ url_for('todaybp.today') }}?day='+this.value"/>
-    </div>
-    <div class="grid">
-      {% for m in members %}
-      <div>
-        <div>
-          <strong>{{ m['name'] }}</strong>
-          <span class="muted">({{ credits.get(m['key'], 0) }} credits)</span>
-        </div>
-        <select name="{{ m['key'] }}">
-          <option value="D" {% if roles[m['key']]=='D' %}selected{% endif %}>Driver</option>
-          <option value="R" {% if roles[m['key']]=='R' %}selected{% endif %}>Rider</option>
-          <option value="O" {% if roles[m['key']]=='O' %}selected{% endif %}>Off</option>
-        </select>
-      </div>
-      {% endfor %}
-    </div>
-    <br>
-    {% if can_edit %}
-      <button type="submit" class="btn btn-primary">Save</button>
-    {% else %}
-      <button type="button" class="btn btn-secondary" disabled>Editing locked (admin only)</button>
-    {% endif %}
-  </form>
-
-  {# Suggestion message box below the form #}
-  {% if no_carpool %}
-    <div class="alert alert-warning mt-3"><strong>No Carpool Today</strong></div>
-  {% elif suggestion_name %}
-    <div class="alert alert-info mt-3">
-      {{ suggestion_name }} {{ 'is driving today' if driver_is_explicit else 'should drive' }}
-    </div>
-  {% endif %}
-
-{% endblock %}
-"""
-
-
+# --- Diagnostics ---------------------------------------------------------------
 @adminbp.route("/admin/diag")
 @login_required
 def admin_diag():
     db = get_db()
+
     # Find SQLite main path
     main_path = None
     try:
-        dblist = db.execute("PRAGMA database_list").fetchall()
-        for _, name, path in dblist:
+        for _, name, path in db.execute("PRAGMA database_list").fetchall():
             if name == "main":
                 main_path = path or ""
                 break
     except Exception:
         pass
+
     exists = os.path.exists(main_path) if main_path else False
     size = os.path.getsize(main_path) if exists else 0
     mtime = os.path.getmtime(main_path) if exists else 0
 
-    rows = db.execute("SELECT day, member_key, role, update_user, update_ts FROM entries").fetchall()
+    rows = db.execute(
+        "SELECT day, member_key, role, update_user, update_ts FROM entries"
+    ).fetchall()
     n_entries = len(rows)
 
+    # Compute day stats
     by_day = defaultdict(lambda: {"CA": None, "ER": None, "SJ": None})
     day_set = set()
     for r in rows:
         d = r["day"]
-        d = day_to_date(d) if not isinstance(d, date) else d
+        d = _day_to_date(d) if not isinstance(d, date) else d
         day_set.add(d)
         by_day[d][r["member_key"]] = r["role"]
 
@@ -313,12 +355,14 @@ def admin_diag():
 
     newest_days = sorted(day_set, reverse=True)[:25]
     oldest_days = sorted(day_set)[:25]
-    newest = [{ "day": f"{d:%Y-%m-%d}",
-                "CA": by_day[d]["CA"], "ER": by_day[d]["ER"], "SJ": by_day[d]["SJ"] }
-              for d in newest_days]
-    oldest = [{ "day": f"{d:%Y-%m-%d}",
-                "CA": by_day[d]["CA"], "ER": by_day[d]["ER"], "SJ": by_day[d]["SJ"] }
-              for d in oldest_days]
+    newest = [
+        {"day": f"{d:%Y-%m-%d}", "CA": by_day[d]["CA"], "ER": by_day[d]["ER"], "SJ": by_day[d]["SJ"]}
+        for d in newest_days
+    ]
+    oldest = [
+        {"day": f"{d:%Y-%m-%d}", "CA": by_day[d]["CA"], "ER": by_day[d]["ER"], "SJ": by_day[d]["SJ"]}
+        for d in oldest_days
+    ]
 
     def fmt_ts(ts):
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "n/a"
@@ -373,5 +417,5 @@ def admin_diag():
         main_path=main_path, exists=exists, size=size,
         mtime_fmt=fmt_ts(mtime), n_entries=n_entries, n_days=n_days,
         min_day=min_day, max_day=max_day, per_year=per_year,
-        newest=newest, oldest=oldest
+        newest=newest, oldest=oldest,
     )
